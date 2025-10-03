@@ -15,7 +15,7 @@ jobs:
       - name: Checkout source repo files
         uses: actions/checkout@v4
         with:
-          repository: YOUR_USERNAME/Z1verso_SKU
+          repository: Zlagoviah/Z1verso_SKU
           token: ${{ secrets.GH_PAT }}
           path: source_repo
           sparse-checkout: |
