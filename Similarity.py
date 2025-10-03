@@ -1,7 +1,7 @@
 import spacy
 import pandas as pd
 
-nlp = spacy.load("./output_fresh/model-best")
+nlp = spacy.load("model-best")
 df_Skus = pd.read_csv('source_repo/productos.csv', encoding='utf-8')
 df_desc = pd.read_csv('source_repo/productos_dico.csv', encoding='utf-8')
 
