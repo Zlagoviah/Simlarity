@@ -8,12 +8,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Step 1: Checkout the target repository
-      - name: Checkout this repo
-        uses: actions/checkout@v4
-
+      - name: Checkout repo with LFS
+        uses: actions/checkout@v5
+        with:
+          lfs: true
+          fetch-depth: 0  # optional, ensures full history if needed
+      
+      - name: Ensure LFS objects are present
+        run: |
+          git lfs install --local
+          git lfs pull
+          git lfs ls-files -l
+          
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
       # Step 2: Checkout the source repository (Z1verso_SKU) in a subdirectory
       - name: Checkout source repo files
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: Zlagoviah/Z1verso_SKU
           token: ${{ secrets.GH_PAT }}
@@ -22,12 +35,6 @@ jobs:
             productos.csv
             productos_dico.csv
           sparse-checkout-cone-mode: false
-
-      # Step 3: Setup Python and dependencies
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
 
       - name: Install dependencies
         run: |
