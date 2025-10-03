@@ -1,0 +1,30 @@
+name: Fetch file from another repo
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  fetch-file:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout this repository
+      - uses: actions/checkout@v4
+
+      # Checkout the other repository
+      - name: Checkout other repo
+        uses: actions/checkout@v4
+        with:
+          repository: owner/other-repo
+          token: ${{ secrets.OTHER_REPO_PAT }}
+          path: other-repo
+
+      # Use the specific file from the other repo
+      - name: Show file from another repo
+        run: cat other-repo/path/to/file.txt
+
+      # Trigger your custom action
+      - name: Run something with the file
+        run: |
+          python your_script.py other-repo/path/to/file.txt
