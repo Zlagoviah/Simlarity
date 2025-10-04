@@ -277,7 +277,7 @@ def strip_text(text):
 
 # -------------------------
 # compare_entities with safer checks
-def compare_entities(val_desc, val_sku, entity_label, fuzzy_threshold=80):
+def compare_entities(val_desc, val_sku, entity_label, fuzzy_threshold=70):
     # None/empty check
     if not val_desc or not val_sku:
         return False
@@ -313,7 +313,7 @@ def compare_entities(val_desc, val_sku, entity_label, fuzzy_threshold=80):
 
 # -------------------------
 # normalized_entity_score unchanged except safer access
-def normalized_entity_score(desc_entities, sku_entities, weight_cat, fuzzy_threshold=80):
+def normalized_entity_score(desc_entities, sku_entities, weight_cat, fuzzy_threshold=70):
     # ensure dicts
     desc_entities = desc_entities if isinstance(desc_entities, dict) else {}
     sku_entities = sku_entities if isinstance(sku_entities, dict) else {}
@@ -344,7 +344,6 @@ if "entities" not in df_Skus or df_Skus["entities"].isnull().all():
     df_Skus["entities"] = batch_extract_entities(nlp, df_Skus["processed_description"])
     # explicit ensure index alignment
     df_Skus["entities"] = df_Skus["entities"].reindex(df_Skus.index)
-    df_Skus.to_csv('productos_merged.csv', index=False)
 
 if "processed_description" not in df_desc:
     # You will define preprocess_text as before (your normalization logic)
@@ -384,7 +383,7 @@ df_Skus["category_homol"] = df_Skus["category"].apply(homologate_category)
 
 # -------------------------
 # Main matching loop (vectorized access for tfidf_sim)
-THRESH = 0.75  # keep consistent with current pipeline
+THRESH = 0.65  # keep consistent with current pipeline
 
 results = []
 for i, desc_row in df_desc.iterrows():
@@ -425,7 +424,7 @@ for i, desc_row in df_desc.iterrows():
         dtype=float
     )
 
-    final_scores = 0.75 * ent_sims + 0.25 * tfidf_sims
+    final_scores = 0.65 * ent_sims + 0.35 * tfidf_sims
 
     # 2) Decide on primary category result
     picked = False
@@ -460,7 +459,7 @@ for i, desc_row in df_desc.iterrows():
                 dtype=float
             )
 
-            final_scores_fb = 0.75 * ent_sims_fb + 0.25 * tfidf_sims_fb
+            final_scores_fb = 0.65 * ent_sims_fb + 0.35 * tfidf_sims_fb
 
             if final_scores_fb.size and final_scores_fb.max() >= THRESH:
                 best_pos = int(np.argmax(final_scores_fb))
@@ -475,4 +474,5 @@ for i, desc_row in df_desc.iterrows():
                 df_desc.at[i, "category_corrected"] = True
             # else: leave blank (no SKU meets threshold)
 
+df_Skus.to_csv('productos_merged.csv', index=False)
 df_desc.to_csv('df_desc.csv', index=False)
