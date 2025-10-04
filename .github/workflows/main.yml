@@ -6,7 +6,17 @@ on:
 jobs:
   process-entities:
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+    
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
       # Step 1: Checkout the target repository
       - name: Checkout repo with LFS
         uses: actions/checkout@v5
@@ -25,6 +35,12 @@ jobs:
         with:
           python-version: "3.11"
           
+      - name: Pull latest changes from remote
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git pull origin main --rebase --autostash
+      
       # Step 2: Checkout the source repository (Z1verso_SKU) in a subdirectory
       - name: Checkout source repo files
         uses: actions/checkout@v5
@@ -46,3 +62,9 @@ jobs:
       - name: Run NLP extraction
         run: |
           python Similarity.py
+          
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update products and df_desc"
+          file_pattern: "*.csv"
