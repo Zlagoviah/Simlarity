@@ -1,13 +1,17 @@
 import numpy as np
 import pandas as pd
 import re
-import spacy
+import spacyç
+import spacyçimport unicodedata
+
+import nltk
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from rapidfuzz import fuzz
 
+nltk.download('punkt_tab')
 nlp = spacy.load("model-best")
 
 df_skus = pd.read_csv('source_repo/productos.csv', encoding='utf-8')
