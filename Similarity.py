@@ -346,6 +346,10 @@ if "entities" not in df_Skus or df_Skus["entities"].isnull().all():
     df_Skus["entities"] = df_Skus["entities"].reindex(df_Skus.index)
     df_Skus.to_csv('productos_merged.csv', index=False)
 
+if "processed_description" not in df_desc:
+    # You will define preprocess_text as before (your normalization logic)
+    df_desc['processed_description'] = df_desc['descripcion'].apply(preprocess_text)
+
 if "entities" not in df_desc or df_desc["entities"].isnull().all():
     df_desc["entities"] = batch_extract_entities(nlp, df_desc["processed_description"])
     df_desc["entities"] = df_desc["entities"].reindex(df_desc.index)
