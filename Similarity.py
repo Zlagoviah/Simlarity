@@ -3,6 +3,7 @@ import pandas as pd
 import re
 import spacy
 import unicodedata
+import ast
 
 import nltk
 
