@@ -39,6 +39,9 @@ new_from_cyber = df_skus[~df_skus["sku"].isin(existing_skus)]
 # --- combine ---
 df_Skus = pd.concat([df_Skus, new_from_cyber, new_from_dico], ignore_index=True)
 
+# Read entities as dictionary
+if "entities" in df_Skus.columns:
+    df_Skus["entities"] = df_Skus["entities"].apply(lambda x: ast.literal_eval(x) if pd.notna(x) else {})
 # -------------------------
 # Load model
 nlp = spacy.load("model-best")  # ensure this path is correct
