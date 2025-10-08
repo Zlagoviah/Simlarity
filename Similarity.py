@@ -18,9 +18,26 @@ df_skus = pd.read_csv('source_repo/productos.csv', encoding='utf-8')
 
 df_skus_dico = pd.read_csv('source_repo/productos_dico.csv', encoding='utf-8')
 df_skus_dico.rename(columns={'category': 'category_old', 'subfamilia': 'category'}, inplace=True)
-df_Skus = pd.concat([df_skus, df_skus_dico], ignore_index=True)
 
 df_desc = pd.read_csv('df_descc.csv', encoding='utf-8')
+
+df_Skus = pd.read_csv('productos_merged.csv', encoding='utf-8')
+
+# Update historical productos merges with new data form scrapper
+# ensure "sku" exists in all dataframes and has consistent dtype
+for df in [df_skus, df_skus_dico, df_Skus]:
+    if "sku" not in df.columns:
+        raise ValueError(f"DataFrame missing 'sku' column: {df}")
+
+# --- find which SKUs are new ---
+existing_skus = set(df_Skus["sku"])
+
+# filter new rows from a and b that are not in c
+new_from_dico = df_skus_dico[~df_skus_dico["sku"].isin(existing_skus)]
+new_from_cyber = df_skus[~df_skus["sku"].isin(existing_skus)]
+
+# --- combine ---
+df_Skus = pd.concat([df_Skus, new_from_cyber, new_from_dico], ignore_index=True)
 
 # -------------------------
 # Load model
@@ -333,29 +350,129 @@ def normalized_entity_score(desc_entities, sku_entities, weight_cat, fuzzy_thres
     return score / denom
 
 # -------------------------
+def _is_populated_entity(x):
+    """Return True if x looks like a populated entity (non-empty dict/list/string)."""
+    if isinstance(x, dict):
+        return bool(x)
+    if isinstance(x, (list, tuple, set)):
+        return len(x) > 0
+    if pd.isna(x):
+        return False
+    s = str(x).strip()
+    return s not in ("", "{}", "[]")
 
-# Apply preprocessing to the 'descripcion' column in both DataFrames 
-if "processed_description" not in df_Skus:
-    # You will define preprocess_text as before (your normalization logic)
-    df_Skus["processed_description"] = df_Skus["descripcion"].apply(preprocess_text)
+# === Keep this function as you had it for df_Skus (unchanged) ===
+def ensure_processed_and_entities(
+    df,
+    nlp,
+    preprocess_text,
+    batch_extract_entities
+):
+    df = df.copy()
 
-# Ensure dataframes have entities column (explicitly aligned)
-if "entities" not in df_Skus or df_Skus["entities"].isnull().all():
-    df_Skus["entities"] = batch_extract_entities(nlp, df_Skus["processed_description"])
-    # explicit ensure index alignment
-    df_Skus["entities"] = df_Skus["entities"].reindex(df_Skus.index)
+    if "processed_description" not in df:
+        df["processed_description"] = pd.NA
+    if "entities" not in df:
+        df["entities"] = pd.NA
 
-if "processed_description" not in df_desc:
-    # You will define preprocess_text as before (your normalization logic)
-    df_desc['processed_description'] = df_desc['descripcion'].apply(preprocess_text)
+    processed_missing = (
+        df["processed_description"].isnull()
+        | df["processed_description"].astype(str).str.strip().eq("")
+    )
 
-if "entities" not in df_desc or df_desc["entities"].isnull().all():
-    df_desc["entities"] = batch_extract_entities(nlp, df_desc["processed_description"])
-    df_desc["entities"] = df_desc["entities"].reindex(df_desc.index)
+    if processed_missing.any():
+        df.loc[processed_missing, "processed_description"] = (
+            df.loc[processed_missing, "descripcion"].apply(preprocess_text)
+        )
 
-# replace NaN with empty dicts
-df_Skus["entities"] = df_Skus["entities"].apply(lambda x: x if isinstance(x, dict) else {})
-df_desc["entities"] = df_desc["entities"].apply(lambda x: x if isinstance(x, dict) else {})
+    entities_missing = ~df["entities"].apply(_is_populated_entity)
+
+    if entities_missing.any():
+        src_texts = df.loc[entities_missing, "processed_description"]
+        try:
+            extracted = batch_extract_entities(nlp, src_texts)
+        except Exception:
+            extracted = src_texts.apply(lambda t: batch_extract_entities(nlp, t))
+
+        try:
+            if hasattr(extracted, "__len__") and len(extracted) == len(src_texts):
+                df.loc[entities_missing, "entities"] = list(extracted)
+            else:
+                if isinstance(extracted, (dict, list)):
+                    df.loc[entities_missing, "entities"] = [extracted] * src_texts.shape[0]
+                else:
+                    df.loc[entities_missing, "entities"] = src_texts.apply(lambda t: batch_extract_entities(nlp, t))
+        except Exception:
+            df.loc[entities_missing, "entities"] = src_texts.apply(lambda t: batch_extract_entities(nlp, t))
+
+    df["entities"] = df["entities"].apply(lambda x: x if isinstance(x, dict) else ({} if pd.isna(x) or str(x).strip() == "" else x))
+    return df
+
+# === New: apply only when sku is missing in df_desc ===
+def ensure_desc_fill_when_sku_missing(
+    df_desc,
+    nlp,
+    preprocess_text,
+    batch_extract_entities,
+    sku_col_name="sku"  # case-insensitive
+):
+    df = df_desc.copy()
+
+    # ensure columns exist
+    if "processed_description" not in df:
+        df["processed_description"] = pd.NA
+    if "entities" not in df:
+        df["entities"] = pd.NA
+
+    # find sku column name in df (case-insensitive). If not present, treat all rows as missing sku.
+    found_sku_col = None
+    for c in df.columns:
+        if c.lower() == sku_col_name.lower():
+            found_sku_col = c
+            break
+
+    if found_sku_col is None:
+        sku_missing_mask = pd.Series(True, index=df.index)
+    else:
+        sku_missing_mask = df[found_sku_col].isnull() | df[found_sku_col].astype(str).str.strip().eq("")
+
+    # Rows where we must ensure processed_description (only where sku is missing AND processed_description empty)
+    to_process_descr = sku_missing_mask & (df["processed_description"].isnull() | df["processed_description"].astype(str).str.strip().eq(""))
+    if to_process_descr.any():
+        df.loc[to_process_descr, "processed_description"] = df.loc[to_process_descr, "descripcion"].apply(preprocess_text)
+
+    # Rows where entities must be extracted (only where sku is missing AND entities not populated)
+    to_extract_entities = sku_missing_mask & (~df["entities"].apply(_is_populated_entity))
+
+    if to_extract_entities.any():
+        src_texts = df.loc[to_extract_entities, "processed_description"]
+        try:
+            extracted = batch_extract_entities(nlp, src_texts)
+        except Exception:
+            extracted = src_texts.apply(lambda t: batch_extract_entities(nlp, t))
+
+        # assign results robustly (same approach as df_Skus)
+        try:
+            if hasattr(extracted, "__len__") and len(extracted) == len(src_texts):
+                df.loc[to_extract_entities, "entities"] = list(extracted)
+            else:
+                if isinstance(extracted, (dict, list)):
+                    df.loc[to_extract_entities, "entities"] = [extracted] * src_texts.shape[0]
+                else:
+                    df.loc[to_extract_entities, "entities"] = src_texts.apply(lambda t: batch_extract_entities(nlp, t))
+        except Exception:
+            df.loc[to_extract_entities, "entities"] = src_texts.apply(lambda t: batch_extract_entities(nlp, t))
+
+    # Normalize entities column to empty dicts where appropriate
+    df["entities"] = df["entities"].apply(lambda x: x if isinstance(x, dict) else ({} if pd.isna(x) or str(x).strip() == "" else x))
+    return df
+
+# === Usage ===
+# Leave df_Skus behavior unchanged
+df_Skus = ensure_processed_and_entities(df_Skus, nlp, preprocess_text, batch_extract_entities)
+
+# For df_desc: only process rows where sku is missing/empty (case-insensitive column name)
+df_desc = ensure_desc_fill_when_sku_missing(df_desc, nlp, preprocess_text, batch_extract_entities, sku_col_name="sku")
 
 # -------------------------
 # Build TF-IDF and similarity matrix
