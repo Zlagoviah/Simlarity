@@ -12,6 +12,10 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from rapidfuzz import fuzz
 
+# LIBRERIUAS PARA MODIFICAR GOOGLE SHEETS
+from gspread.utils import rowcol_to_a1
+import math
+
 # READ FROM GOOGLE SHEETS
 import os, json
 import gspread
