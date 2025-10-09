@@ -12,6 +12,88 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from rapidfuzz import fuzz
 
+# READ FROM GOOGLE SHEETS
+import os, json
+import gspread
+
+from datetime import datetime
+
+
+DATE_COL = "fecha"
+
+# ─── 1. LOAD YOUR DATAFRAME ────────────────────────────────────────────────────
+def normalize(col: str) -> str:
+  # strip, turn spaces and dashes into underscores, lowercase
+  return re.sub(r"[\s\-]+", "_", col.strip()).lower()
+
+# 1) auth & open sheet
+creds_json = os.environ["GOOGLE_CREDS_JSON"]  # secret from Actions [web:12]
+gc = gspread.service_account_from_dict(json.loads(creds_json))  # dict-based auth [web:95][web:101]
+ws = gc.open("Concentrador de ventas").worksheet("Cotizaciones")  # share with client_email [web:95]
+
+def load_my_df() -> pd.DataFrame:
+    global ws  # Declare ws as global
+    
+    """Fetches the sheet, renames columns, parses types."""  
+    # 2) load all records
+    raw = pd.DataFrame(ws.get_all_records())
+    
+    # Normalize column names
+    raw.columns = [normalize(c) for c in raw.columns]
+    
+    # Debug to see normalized names
+    print("Normalized Columns:", raw.columns.tolist())
+    
+    mapping = {
+      "id":                               "id",
+      "path":                             "path",
+      "no._folio_de_cotizacion":          "no_cotizacion",
+      "fecha":                            "fecha",
+      "producto":                         "producto",
+      "sku":                              "sku",
+      "descripción":                      "descripcion",
+      "unidades":                         "unidades",
+      "precio_p._(precio_sin_iva)":       "precio_p",
+      "precio_p/unidad_(precio_sin_iva)": "precio_unitario",
+      "precio_c/u":                       "precio_cu",
+      "precio_final":                     "precio_final"
+    }
+    
+    # 3) rename columns: map your sheet headers → model fields
+    df = raw.rename(columns=mapping)
+    
+    # 4) Ensure all required columns are present
+    required = set(mapping.values())
+    missing = required - set(df.columns)
+    if missing:
+      raise KeyError(f"Missing expected columns after rename: {missing}")
+    
+    # 5) parse & cast types **vectorized**
+    df[DATE_COL] = pd.to_datetime(
+      df[DATE_COL], format="%d/%m/%Y %H:%M:%S", dayfirst=True
+    ).dt.date
+    
+    df["unidades"]          = pd.to_numeric(df["unidades"],  errors="coerce").fillna(0).astype(int)
+    df["precio_p"]          = pd.to_numeric(df["precio_p"].str.replace(r'[$,]', '', regex=True), errors="coerce").fillna(0.0).astype(float)
+    df["precio_unitario"]   = pd.to_numeric(df["precio_unitario"].str.replace(r'[$,]', '', regex=True), errors="coerce").fillna(0.0).astype(float)
+    df["precio_cu"]         = pd.to_numeric(df["precio_cu"].str.replace(r'[$,]', '', regex=True), errors="coerce").fillna(0.0).astype(float)
+    df["precio_final"]      = pd.to_numeric(df["precio_final"].str.replace(r'[$,]', '', regex=True), errors="coerce").fillna(0.0).astype(float)
+    
+    # 1a. Identify all columns you want to trim (e.g. object‑dtype columns)
+    str_cols = df.select_dtypes(include=['object']).columns
+    
+    # 2a. On each of those columns, map only the str values through .strip()
+    df[str_cols] = df[str_cols].apply(
+      lambda col: col.map(lambda x: x.strip() if isinstance(x, str) else x)
+    )
+    
+    # 6) Drop any fully empty rows/columns and return
+    return df.dropna(how="all", axis=1).dropna(how="all", axis=0)
+
+df_desc = load_my_df()
+
+#--------
+# READ THE REST OF THE FILES
 nltk.download('punkt_tab')
 nlp = spacy.load("model-best")
 
@@ -19,8 +101,6 @@ df_skus = pd.read_csv('source_repo/productos.csv', encoding='utf-8')
 
 df_skus_dico = pd.read_csv('source_repo/productos_dico.csv', encoding='utf-8')
 df_skus_dico.rename(columns={'category': 'category_old', 'subfamilia': 'category'}, inplace=True)
-
-df_desc = pd.read_csv('df_descc.csv', encoding='utf-8')
 
 df_Skus = pd.read_csv('productos_merged.csv', encoding='utf-8')
 
@@ -595,5 +675,53 @@ for i, desc_row in df_desc.iterrows():
                 df_desc.at[i, "category_corrected"] = True
             # else: leave blank (no SKU meets threshold)
 
+#--------------------
+#Prepara archivos para guardar y modificar google sheet
+df_desc['similarity'] = df_desc['similarity'].round(3)
+
+# Build batch_update requests
+requests = []
+sku_col_idx = list(df_desc.columns).index("sku") + 1  # SKU column (1-based)
+col_M_idx = 13  # M is the 13th column
+col_cat_idx = 14
+
+for idx, row in df_desc.iterrows():
+    if row.get("similarity", 0) >= .88 and pd.notnull(row.get("sku")):
+        sheet_row = idx + 2  # 2: account for header (row 1)
+        # SKU cell
+        sku_cell = rowcol_to_a1(sheet_row, sku_col_idx)
+        requests.append({"range": sku_cell, "values": [[row["sku"]]]})
+        # Column M cell
+        m_cell = rowcol_to_a1(sheet_row, col_M_idx)
+        requests.append({"range": m_cell, "values": [[row["similarity"]]]})
+        # Column N cell (category_homol) — only if not empty
+        category = row.get("category_homol")
+        corrected = row.get("category_corrected")
+        if pd.notna(category) and str(category).strip() != "" and str(corrected).strip() == "True":
+            n_cell = rowcol_to_a1(sheet_row, col_cat_idx)
+            requests.append({"range": n_cell, "values": [[category]]})
+
+# If you need to split into chunks of 500 updates (Google Sheets has limits):
+def chunked(iterable, size):
+    for i in range(0, len(iterable), size):
+        yield iterable[i:i+size]
+
+for chunk in chunked(requests, 500):
+    body = {"valueInputOption": "USER_ENTERED", "data": chunk}
+
+# Perform batch update only if needed
+if requests:
+  ws.batch_update(requests)
+
+# create a timestamp like 081020251530 (8 Oct 2025, 15:30)
+timestamp = datetime.now().strftime("%d%m%Y%H%M")
+filename = f"log{timestamp}.csv"
+
+# example: convert updates list to DataFrame for logging
+if requests:
+    log_df = pd.DataFrame(requests)
+    log_df.to_csv(filename, index=False, encoding="utf-8")
+    print(f"Saved log file: {filename}")
+    
 df_Skus.to_csv('productos_merged.csv', index=False)
 df_desc.to_csv('df_desc.csv', index=False)
