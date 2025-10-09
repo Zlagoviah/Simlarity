@@ -60,6 +60,9 @@ jobs:
 
       # Step 4: Run your Python script, referencing files from the source repo
       - name: Run NLP extraction
+        if: env.USE_FILE != '1'
+        env:
+          GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
         run: |
           python Similarity.py
           
